@@ -1,107 +1,118 @@
 use axum::{
-    body::{Body, Bytes},
-    extract,
-    http::{HeaderMap, HeaderValue, Request, Response, StatusCode},
-    routing::{any, get, post},
+    body::Body,
+    http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
+    routing::{any, get},
     Router,
 };
-use ocastaproxy::{
-    codec::{decode, encode},
-    errors, websocket,
-};
-use serde::Deserialize;
-use std::{collections::HashMap, net::SocketAddr};
+use ocastaproxy::{errors, websocket};
+use std::net::SocketAddr;
 
-#[derive(Deserialize)]
-struct FormData {
-    url: String,
-}
+fn split_headers(headers: HeaderMap) -> HeaderMap {
+    let mut output = headers.clone();
 
-async fn gateway(extract::Path(path): extract::Path<String>, body: Bytes) -> Response<Body> {
-    let mut url = if let Ok(data) = serde_urlencoded::from_bytes::<FormData>(&body) {
-        data.url
-    } else {
-        return errors::error_response(StatusCode::BAD_REQUEST);
-    };
-    if !url.starts_with("http") {
-        url = format!("https://{}", url);
-    }
+    if let Some(value) = headers.get("x-bare-headers") {
+        if let Ok(value) = value.to_str() {
+            if value.len() > 3072 {
+                output.remove("x-bare-headers");
 
-    let encoding = path.as_str();
-    url = encode(url, encoding.to_string());
-    url = format!("/{}/{}", encoding, url);
+                let mut split = 0;
 
-    let header = if let Ok(header) = HeaderValue::from_str(&url) {
-        header
-    } else {
-        return errors::error_response(StatusCode::BAD_REQUEST);
-    };
+                for i in (0..value.len()).step_by(3072) {
+                    let part = &value[i..i + 3072];
 
-    let mut headers = HeaderMap::new();
-    headers.insert("location", header);
-
-    let mut res = Response::default();
-    *res.status_mut() = StatusCode::SEE_OTHER;
-    *res.headers_mut() = headers;
-
-    res
-}
-
-async fn proxy(
-    extract::Path((encoding, url)): extract::Path<(String, String)>,
-    extract::Query(query): extract::Query<HashMap<String, String>>,
-    headers: HeaderMap,
-    req: Request<Body>,
-) -> Response<Body> {
-    let mut url = if let Ok(url) = reqwest::Url::parse(&decode(url, encoding.clone())) {
-        url
-    } else {
-        return errors::error_response(StatusCode::BAD_REQUEST);
-    };
-
-    let query = query
-        .iter()
-        .map(|(key, value)| {
-            if value.is_empty() {
-                key.clone()
-            } else {
-                format!("{}={}", key, value)
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("&");
-
-    if !query.is_empty() {
-        url.set_query(Some(&query));
-    }
-
-    let origin = url.origin().ascii_serialization();
-    let mut new_headers = HeaderMap::new();
-    for (key, value) in headers.iter() {
-        match key.as_str() {
-            "host"
-            | "accept-encoding"
-            | "forwarded"
-            | "x-forwarded-for"
-            | "x-forwarded-host"
-            | "x-forwarded-proto"
-            | "x-real-ip"
-            | "x-envoy-external-address" => {}
-            "origin" => {
-                if let Ok(header_value) = HeaderValue::from_str(&origin) {
-                    new_headers.insert(key.clone(), header_value);
+                    let id = split;
+                    output.insert(
+                        HeaderName::from_bytes(format!("x-bare-headers-{}", id).as_bytes())
+                            .unwrap(),
+                        HeaderValue::from_str(format!(";{}", part).as_str()).unwrap(),
+                    );
+                    split += 1;
                 }
-            }
-            "referer" => {
-                if let Ok(header_value) = HeaderValue::from_str(&origin) {
-                    new_headers.insert(key.clone(), header_value);
-                }
-            }
-            _ => {
-                new_headers.insert(key.clone(), value.clone());
             }
         }
     }
+
+    output
+}
+
+fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
+    let mut new_headers = HeaderMap::new();
+    for (key, value) in headers.iter() {
+        if !key.as_str().starts_with("x-bare-headers-") {
+            continue;
+        }
+        new_headers.insert(key, value.clone());
+    }
+
+    if new_headers.len() > 0 {
+        let mut join = vec![];
+        for (key, value) in headers.iter() {
+            if !value.to_str().unwrap().starts_with(';') {
+                return Err(());
+            }
+
+            let id = key
+                .as_str()
+                .replace("x-bare-headers-", "")
+                .parse::<usize>()
+                .unwrap();
+
+            join[id] = value.to_str().unwrap().replace(";", "");
+
+            new_headers.remove(key);
+        }
+        return Ok(HeaderValue::from_str(join.join("").as_str()).unwrap());
+    } else {
+        return Err(());
+    }
+}
+
+async fn proxy(headers: HeaderMap, req: Request<Body>) -> Response<Body> {
+    let url = headers
+        .get("X-Bare-URL")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+
+    if url.is_empty() {
+        return errors::error_response(StatusCode::BAD_REQUEST);
+    }
+
+    let bare_headers = if let Ok(bare_headers) = join_headers(headers.clone()) {
+        bare_headers
+    } else {
+        return errors::error_response(StatusCode::BAD_REQUEST);
+    };
+
+    let bare_headers: Vec<(&str, &str)> =
+        if let Ok(bare_headers) = serde_json::from_str(bare_headers.to_str().unwrap_or_default()) {
+            bare_headers
+        } else {
+            return errors::error_response(StatusCode::BAD_REQUEST);
+        };
+
+    let mut new_headers = HeaderMap::new();
+    for (key, value) in bare_headers {
+        if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+            if let Ok(value) = HeaderValue::from_str(&value) {
+                new_headers.insert(key, value);
+            }
+        }
+    }
+
+    headers
+        .get("X-Bare-Forward-Headers")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(",")
+        .filter(|key| match *key {
+            "connection" | "transfer-encoding" | "host" | "origin" | "referer" => false,
+            _ => true,
+        })
+        .for_each(|key| {
+            if let Some(value) = headers.get(key) {
+                new_headers.insert(key.parse::<HeaderName>().unwrap(), value.clone());
+            }
+        });
 
     let client = reqwest::Client::new();
     let request_builder = match req.method().as_str() {
@@ -137,54 +148,130 @@ async fn proxy(
     };
 
     let status = response.status();
-    let mut response_headers = response.headers().clone();
-    response_headers.remove("content-security-policy");
-    response_headers.remove("content-security-policy-report-only");
-    response_headers.remove("strict-transport-security");
-    response_headers.remove("x-content-type-options");
-    response_headers.remove("x-frame-options");
-    let content_type = if let Some(content_type) = response_headers.get("content-type") {
-        content_type
-    } else {
-        return errors::error_response(StatusCode::BAD_REQUEST);
-    };
 
-    if content_type.to_str().unwrap_or("").starts_with("image/") {
-        let mut res = Response::default();
-        *res.status_mut() = status;
-        *res.headers_mut() = response_headers;
-        *res.body_mut() = response.bytes().await.unwrap_or_default().into();
-        return res;
-    }
+    let response_headers = response.headers().clone();
+    let response_headers: Vec<(&str, &str)> = response_headers
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.to_str().unwrap_or_default()))
+        .collect();
 
-    let page = if let Ok(page) = response.text().await {
+    let response_headers_bare =
+        if let Ok(response_headers_bare) = serde_json::to_string(&response_headers) {
+            response_headers_bare
+        } else {
+            return errors::error_response(StatusCode::BAD_REQUEST);
+        };
+
+    let page = if let Ok(page) = response.bytes().await {
         page
     } else {
         return errors::error_response(StatusCode::BAD_REQUEST);
     };
 
-    response_headers.insert(
-        "content-length",
-        if let Ok(content_length) = HeaderValue::from_str(&page.len().to_string()) {
+    let mut new_headers = HeaderMap::new();
+    new_headers.insert(
+        "Content-Length",
+        if let Ok(content_length) = page.len().to_string().parse() {
             content_length
         } else {
             return errors::error_response(StatusCode::BAD_REQUEST);
         },
     );
+    new_headers.insert(
+        "x-bare-status",
+        if let Ok(status) = status.as_str().parse() {
+            status
+        } else {
+            return errors::error_response(StatusCode::BAD_REQUEST);
+        },
+    );
+    new_headers.insert(
+        "x-bare-status-text",
+        if let Some(status) = status.canonical_reason() {
+            if let Ok(status) = status.parse() {
+                status
+            } else {
+                return errors::error_response(StatusCode::BAD_REQUEST);
+            }
+        } else {
+            return errors::error_response(StatusCode::BAD_REQUEST);
+        },
+    );
+    new_headers.insert(
+        "x-bare-headers",
+        if let Ok(response_headers_bare) = HeaderValue::from_str(&response_headers_bare) {
+            response_headers_bare
+        } else {
+            return errors::error_response(StatusCode::BAD_REQUEST);
+        },
+    );
+    let mut new_headers = split_headers(new_headers);
+
+    let bare_pass_headers = headers
+        .get("X-Bare-Pass-Headers")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(",")
+        .filter(|key| match *key {
+            "vary"
+            | "connection"
+            | "transfer-encoding"
+            | "access-control-allow-headers"
+            | "access-control-allow-methods"
+            | "access-control-expose-headers"
+            | "access-control-max-age"
+            | "access-control-request-headers"
+            | "access-control-request-method" => false,
+            _ => true,
+        })
+        .collect::<Vec<&str>>();
+
+    for (key, value) in response_headers {
+        if !bare_pass_headers.contains(&key) {
+            continue;
+        }
+
+        if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+            if let Ok(value) = HeaderValue::from_str(&value) {
+                new_headers.insert(key, value);
+            }
+        }
+    }
+
+    let bare_pass_status = headers
+        .get("X-Bare-Pass-Status")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(",")
+        .collect::<Vec<&str>>();
 
     let mut res = Response::default();
-    *res.status_mut() = status;
-    *res.headers_mut() = response_headers;
+    *res.headers_mut() = new_headers;
     *res.body_mut() = page.into();
+
+    if bare_pass_status.contains(&status.as_str()) {
+        *res.status_mut() = status;
+    }
+
+    res
+}
+
+async fn index() -> Response<Body> {
+    let mut res = Response::default();
+    *res.body_mut() = include_str!("../static/index.json").into();
+    res.headers_mut().insert(
+        "Content-Type",
+        HeaderValue::from_str("application/json").unwrap(),
+    );
     res
 }
 
 #[tokio::main]
 async fn main() {
     let app = Router::new()
-        .route("/:encoding/gateway", post(gateway))
-        .route("/:encoding/*url", any(proxy))
-        .route("/ws/:encoding/*url", get(websocket::proxy));
+        .route("/", get(index))
+        .route("/v3/ws", get(websocket::proxy))
+        .route("/v3", any(proxy));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     axum::Server::bind(&addr)

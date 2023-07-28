@@ -1,86 +1,89 @@
 use crate::errors;
 use axum::{
     body::Body,
-    extract::{
-        self,
-        ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
-    },
-    http::{Request, StatusCode},
+    extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
+    http::{HeaderMap, HeaderName, Request, StatusCode},
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
-use serde::Deserialize;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{http, Message as TungsteniteMessage},
-    MaybeTlsStream, WebSocketStream,
 };
 
-#[derive(Deserialize)]
-pub struct ProxyData {
-    #[serde(flatten)]
-    query: std::collections::HashMap<String, String>,
+pub async fn proxy(ws: WebSocketUpgrade, req: Request<Body>) -> impl IntoResponse {
+    let headers = req.headers().clone();
+    ws.on_upgrade(move |session| handle_socket(session, headers))
 }
 
-pub async fn proxy(
-    ws: WebSocketUpgrade,
-    extract::Path((_encoding, url)): extract::Path<(String, String)>,
-    query: extract::Query<ProxyData>,
-    req: Request<Body>,
-) -> impl IntoResponse {
-    let mut url = if let Ok(url) = reqwest::Url::parse(&url) {
-        url
-    } else {
-        return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
+    let msg = match session.next().await {
+        Some(Ok(msg)) => msg,
+        _ => return,
+    };
+    let msg = msg.into_text().unwrap_or_default();
+    let msg: Vec<(String, String)> = match serde_json::from_str(&msg) {
+        Ok(msg) => msg,
+        _ => return,
     };
 
-    url.query_pairs_mut().clear().extend_pairs(
-        query
-            .query
-            .iter()
-            .filter(|(key, _)| !key.starts_with("origin=")),
-    );
-
-    let default_origin = String::new();
-    let origin = query.query.get("origin").unwrap_or(&default_origin);
-
-    let headers = req
-        .headers()
+    let url = msg
         .iter()
-        .map(|(k, v)| match k.as_str() {
-            "origin" => (
-                k.clone(),
-                http::HeaderValue::from_str(origin)
-                    .unwrap_or_else(|_| http::HeaderValue::from_static("")),
-            ),
-            "host" => (
-                k.clone(),
-                url.host_str()
-                    .unwrap_or("")
-                    .parse()
-                    .unwrap_or_else(|_| http::HeaderValue::from_static("")),
-            ),
-            _ => (k.clone(), v.clone()),
-        })
-        .collect::<http::HeaderMap>();
+        .find(|(key, _)| key == "remote")
+        .map(|(_, value)| value)
+        .unwrap();
+
+    let headers = msg
+        .iter()
+        .find(|(key, _)| key == "headers")
+        .map(|(_, value)| value)
+        .unwrap();
+    let headers: Vec<(String, String)> = match serde_json::from_str(&headers) {
+        Ok(headers) => headers,
+        _ => return,
+    };
+
+    let mut new_headers = HeaderMap::new();
+    for (key, value) in headers {
+        let key = HeaderName::from_bytes(key.as_bytes()).unwrap();
+        new_headers.insert(key, value.parse().unwrap());
+    }
+
+    let forward_headers = msg
+        .iter()
+        .find(|(key, _)| key == "forwardHeaders")
+        .map(|(_, value)| value)
+        .unwrap();
+
+    let forward_headers: Vec<String> = match serde_json::from_str(&forward_headers) {
+        Ok(forward_headers) => forward_headers,
+        _ => return,
+    };
+
+    for key in forward_headers {
+        let key = HeaderName::from_bytes(key.as_bytes()).unwrap();
+        if let Some(value) = req_headers.get(&key) {
+            new_headers.insert(key, value.clone());
+        }
+    }
 
     let mut server = http::Request::builder()
-        .uri(url.as_str())
+        .uri(url)
         .body(())
         .unwrap_or_default();
-    *server.headers_mut() = headers;
+    *server.headers_mut() = new_headers;
 
-    if let Ok((socket, _)) = connect_async(server).await {
-        ws.on_upgrade(move |session| handle_socket(session, socket))
-    } else {
-        errors::error_response(StatusCode::INTERNAL_SERVER_ERROR).into_response()
-    }
-}
+    let mut socket = match connect_async(server).await {
+        Ok((socket, _)) => socket,
+        _ => return,
+    };
 
-async fn handle_socket(
-    mut session: WebSocket,
-    mut socket: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-) {
+    let msg = r#"{"type":"open","protocol":"","setCookies":[]}"#;
+    session
+        .send(AxumMessage::Text(msg.to_string()))
+        .await
+        .unwrap();
+
     loop {
         tokio::select! {
             Some(Ok(msg)) = session.next() => {
