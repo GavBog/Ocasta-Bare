@@ -134,9 +134,6 @@ async fn proxy(headers: HeaderMap, req: Request<Body>) -> Response<Body> {
         .chain(vec![
             "accept-encoding",
             "accept-language",
-            "sec-websocket-extensions",
-            "sec-websocket-key",
-            "sec-websocket-version",
         ])
         .for_each(|key| {
             if let Some(value) = headers.get(key) {

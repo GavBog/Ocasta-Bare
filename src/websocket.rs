@@ -85,9 +85,6 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         .chain(vec![
             "accept-encoding",
             "accept-language",
-            "sec-websocket-extensions",
-            "sec-websocket-key",
-            "sec-websocket-version",
         ])
         .collect::<Vec<_>>();
 
