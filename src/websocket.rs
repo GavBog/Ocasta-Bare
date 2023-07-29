@@ -36,6 +36,7 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         return;
     };
 
+    let default_json = String::from("[]");
     let headers = if let Some(headers) = msg
         .iter()
         .find(|(key, _)| key == "headers")
@@ -43,7 +44,7 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     {
         headers
     } else {
-        return;
+        &default_json
     };
     let headers: Vec<(String, String)> = match serde_json::from_str(&headers) {
         Ok(headers) => headers,
@@ -72,7 +73,7 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     {
         forward_headers
     } else {
-        return;
+        &default_json
     };
 
     let forward_headers: Vec<String> = match serde_json::from_str(&forward_headers) {

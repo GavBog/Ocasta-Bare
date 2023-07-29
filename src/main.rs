@@ -45,6 +45,13 @@ fn split_headers(headers: HeaderMap) -> HeaderMap {
 }
 
 fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
+    if headers.contains_key("x-bare-headers") {
+        return Ok(headers
+            .get("x-bare-headers")
+            .unwrap_or(&HeaderValue::from_static("[]"))
+            .clone());
+    }
+
     let mut new_headers = HeaderMap::new();
     for (key, value) in headers.iter() {
         if !key.as_str().starts_with("x-bare-headers-") {
@@ -244,14 +251,16 @@ async fn proxy(headers: HeaderMap, req: Request<Body>) -> Response<Body> {
         })
         .collect::<Vec<&str>>();
 
-    for (key, value) in response_headers {
-        if !bare_pass_headers.contains(&key) {
-            continue;
-        }
+    if !bare_pass_headers.is_empty() {
+        for (key, value) in response_headers {
+            if !bare_pass_headers.contains(&key) {
+                continue;
+            }
 
-        if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
-            if let Ok(value) = HeaderValue::from_str(&value) {
-                new_headers.insert(key, value);
+            if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+                if let Ok(value) = HeaderValue::from_str(&value) {
+                    new_headers.insert(key, value);
+                }
             }
         }
     }
