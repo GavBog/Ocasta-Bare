@@ -22,9 +22,18 @@ fn split_headers(headers: HeaderMap) -> HeaderMap {
 
                     let id = split;
                     output.insert(
-                        HeaderName::from_bytes(format!("x-bare-headers-{}", id).as_bytes())
-                            .unwrap(),
-                        HeaderValue::from_str(format!(";{}", part).as_str()).unwrap(),
+                        if let Ok(key) =
+                            HeaderName::from_bytes(format!("x-bare-headers-{}", id).as_bytes())
+                        {
+                            key
+                        } else {
+                            continue;
+                        },
+                        if let Ok(value) = HeaderValue::from_str(format!("{};", part).as_str()) {
+                            value
+                        } else {
+                            continue;
+                        },
                     );
                     split += 1;
                 }
@@ -47,21 +56,28 @@ fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
     if new_headers.len() > 0 {
         let mut join = vec![];
         for (key, value) in headers.iter() {
-            if !value.to_str().unwrap().starts_with(';') {
+            if !value.to_str().unwrap_or_default().starts_with(';') {
                 return Err(());
             }
 
-            let id = key
-                .as_str()
-                .replace("x-bare-headers-", "")
-                .parse::<usize>()
-                .unwrap();
+            let id = if let Ok(id) = key.as_str().replace("x-bare-headers-", "").parse::<usize>() {
+                id
+            } else {
+                return Err(());
+            };
 
-            join[id] = value.to_str().unwrap().replace(";", "");
+            join[id] = value.to_str().unwrap_or_default().replace(";", "");
 
             new_headers.remove(key);
         }
-        return Ok(HeaderValue::from_str(join.join("").as_str()).unwrap());
+
+        let output = if let Ok(output) = HeaderValue::from_str(join.join("").as_str()) {
+            output
+        } else {
+            return Err(());
+        };
+
+        return Ok(output);
     } else {
         return Err(());
     }
@@ -110,7 +126,9 @@ async fn proxy(headers: HeaderMap, req: Request<Body>) -> Response<Body> {
         })
         .for_each(|key| {
             if let Some(value) = headers.get(key) {
-                new_headers.insert(key.parse::<HeaderName>().unwrap(), value.clone());
+                if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+                    new_headers.insert(key, value.clone());
+                }
             }
         });
 
@@ -261,7 +279,11 @@ async fn index() -> Response<Body> {
     *res.body_mut() = include_str!("../static/index.json").into();
     res.headers_mut().insert(
         "Content-Type",
-        HeaderValue::from_str("application/json").unwrap(),
+        if let Ok(content_type) = HeaderValue::from_str("application/json") {
+            content_type
+        } else {
+            return errors::error_response(StatusCode::BAD_REQUEST);
+        },
     );
     res
 }

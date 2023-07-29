@@ -1,8 +1,7 @@
-use crate::errors;
 use axum::{
     body::Body,
     extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
-    http::{HeaderMap, HeaderName, Request, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, Request},
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -27,17 +26,25 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         _ => return,
     };
 
-    let url = msg
+    let url = if let Some(url) = msg
         .iter()
         .find(|(key, _)| key == "remote")
         .map(|(_, value)| value)
-        .unwrap();
+    {
+        url
+    } else {
+        return;
+    };
 
-    let headers = msg
+    let headers = if let Some(headers) = msg
         .iter()
         .find(|(key, _)| key == "headers")
         .map(|(_, value)| value)
-        .unwrap();
+    {
+        headers
+    } else {
+        return;
+    };
     let headers: Vec<(String, String)> = match serde_json::from_str(&headers) {
         Ok(headers) => headers,
         _ => return,
@@ -45,15 +52,28 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
 
     let mut new_headers = HeaderMap::new();
     for (key, value) in headers {
-        let key = HeaderName::from_bytes(key.as_bytes()).unwrap();
-        new_headers.insert(key, value.parse().unwrap());
+        let key = if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+            key
+        } else {
+            continue;
+        };
+        let value = if let Ok(value) = HeaderValue::from_str(&value) {
+            value
+        } else {
+            continue;
+        };
+        new_headers.insert(key, value);
     }
 
-    let forward_headers = msg
+    let forward_headers = if let Some(forward_headers) = msg
         .iter()
         .find(|(key, _)| key == "forwardHeaders")
         .map(|(_, value)| value)
-        .unwrap();
+    {
+        forward_headers
+    } else {
+        return;
+    };
 
     let forward_headers: Vec<String> = match serde_json::from_str(&forward_headers) {
         Ok(forward_headers) => forward_headers,
@@ -61,7 +81,11 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     };
 
     for key in forward_headers {
-        let key = HeaderName::from_bytes(key.as_bytes()).unwrap();
+        let key = if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+            key
+        } else {
+            continue;
+        };
         if let Some(value) = req_headers.get(&key) {
             new_headers.insert(key, value.clone());
         }
@@ -79,10 +103,7 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     };
 
     let msg = r#"{"type":"open","protocol":"","setCookies":[]}"#;
-    session
-        .send(AxumMessage::Text(msg.to_string()))
-        .await
-        .unwrap();
+    let _ = session.send(AxumMessage::Text(msg.to_string())).await;
 
     loop {
         tokio::select! {
