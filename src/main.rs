@@ -131,6 +131,13 @@ async fn proxy(headers: HeaderMap, req: Request<Body>) -> Response<Body> {
             "connection" | "transfer-encoding" | "host" | "origin" | "referer" => false,
             _ => true,
         })
+        .chain(vec![
+            "accept-encoding",
+            "accept-language",
+            "sec-websocket-extensions",
+            "sec-websocket-key",
+            "sec-websocket-version",
+        ])
         .for_each(|key| {
             if let Some(value) = headers.get(key) {
                 if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {

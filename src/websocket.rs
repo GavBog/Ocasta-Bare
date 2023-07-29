@@ -76,10 +76,20 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         &default_json
     };
 
-    let forward_headers: Vec<String> = match serde_json::from_str(&forward_headers) {
-        Ok(forward_headers) => forward_headers,
-        _ => return,
-    };
+    let forward_headers = forward_headers
+        .split(',')
+        .filter(|key| match *key {
+            "connection" | "transfer-encoding" | "host" | "origin" | "referer" => false,
+            _ => true,
+        })
+        .chain(vec![
+            "accept-encoding",
+            "accept-language",
+            "sec-websocket-extensions",
+            "sec-websocket-key",
+            "sec-websocket-version",
+        ])
+        .collect::<Vec<_>>();
 
     for key in forward_headers {
         let key = if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
