@@ -92,9 +92,13 @@ fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
     }
 }
 
-async fn proxy(headers: HeaderMap, ws: WebSocketUpgrade, req: Request<Body>) -> impl IntoResponse {
+async fn proxy(
+    headers: HeaderMap,
+    ws: Option<WebSocketUpgrade>,
+    req: Request<Body>,
+) -> impl IntoResponse {
     if headers.get("Upgrade").and_then(|value| value.to_str().ok()) == Some("websocket") {
-        return websocket::proxy(ws, req).await.into_response();
+        return websocket::proxy(ws.unwrap(), req).await.into_response();
     }
 
     let url = headers
@@ -182,6 +186,12 @@ async fn proxy(headers: HeaderMap, ws: WebSocketUpgrade, req: Request<Body>) -> 
     let status = response.status();
 
     let response_headers = response.headers().clone();
+    let mut new_headers = HeaderMap::new();
+    if let Some(value) = response_headers.get("Content-Encoding") {
+        if let Ok(key) = HeaderName::from_bytes("Content-Encoding".as_bytes()) {
+            new_headers.insert(key, value.clone());
+        }
+    }
     let response_headers: Vec<(&str, &str)> = response_headers
         .iter()
         .map(|(key, value)| (key.as_str(), value.to_str().unwrap_or_default()))
@@ -200,7 +210,6 @@ async fn proxy(headers: HeaderMap, ws: WebSocketUpgrade, req: Request<Body>) -> 
         return errors::error_response(StatusCode::BAD_REQUEST).into_response();
     };
 
-    let mut new_headers = HeaderMap::new();
     new_headers.insert(
         "Content-Length",
         if let Ok(content_length) = page.len().to_string().parse() {
@@ -293,14 +302,8 @@ async fn proxy(headers: HeaderMap, ws: WebSocketUpgrade, req: Request<Body>) -> 
 async fn index() -> Response<Body> {
     let mut res = Response::default();
     *res.body_mut() = include_str!("../static/index.json").into();
-    res.headers_mut().insert(
-        "Content-Type",
-        if let Ok(content_type) = HeaderValue::from_str("application/json") {
-            content_type
-        } else {
-            return errors::error_response(StatusCode::BAD_REQUEST);
-        },
-    );
+    res.headers_mut()
+        .insert("Content-Type", HeaderValue::from_static("application/json"));
     res
 }
 
