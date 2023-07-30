@@ -82,10 +82,7 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
             "connection" | "transfer-encoding" | "host" | "origin" | "referer" => false,
             _ => true,
         })
-        .chain(vec![
-            "accept-encoding",
-            "accept-language",
-        ])
+        .chain(vec!["accept-encoding", "accept-language"])
         .collect::<Vec<_>>();
 
     for key in forward_headers {
