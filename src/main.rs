@@ -7,6 +7,7 @@ use axum::{
     Router,
 };
 use ocastaproxy::{errors, websocket};
+use serde_json::Value;
 use std::net::SocketAddr;
 
 fn split_headers(headers: HeaderMap) -> HeaderMap {
@@ -116,17 +117,23 @@ async fn proxy(
         return errors::error_response(StatusCode::BAD_REQUEST).into_response();
     };
 
-    let bare_headers: Vec<(&str, &str)> =
+    let bare_headers =
         if let Ok(bare_headers) = serde_json::from_str(bare_headers.to_str().unwrap_or_default()) {
             bare_headers
         } else {
             return errors::error_response(StatusCode::BAD_REQUEST).into_response();
         };
 
+    let bare_headers = if let Value::Object(bare_headers) = bare_headers {
+        bare_headers
+    } else {
+        return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+    };
+
     let mut new_headers = HeaderMap::new();
     for (key, value) in bare_headers {
         if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
-            if let Ok(value) = HeaderValue::from_str(&value) {
+            if let Ok(value) = HeaderValue::from_str(value.as_str().unwrap_or_default()) {
                 new_headers.insert(key, value);
             }
         }
