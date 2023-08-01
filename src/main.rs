@@ -98,8 +98,8 @@ async fn proxy(
     ws: Option<WebSocketUpgrade>,
     req: Request<Body>,
 ) -> impl IntoResponse {
-    if headers.get("Upgrade").and_then(|value| value.to_str().ok()) == Some("websocket") {
-        return websocket::proxy(ws.unwrap(), req).await.into_response();
+    if let Some(ws) = ws {
+        return websocket::proxy(ws, req).await.into_response();
     }
 
     let url = headers
@@ -253,7 +253,6 @@ async fn proxy(
             return errors::error_response(StatusCode::BAD_REQUEST).into_response();
         },
     );
-    let mut new_headers = split_headers(new_headers);
 
     let bare_pass_headers = headers
         .get("X-Bare-Pass-Headers")
@@ -296,7 +295,7 @@ async fn proxy(
         .collect::<Vec<&str>>();
 
     let mut res = Response::default();
-    *res.headers_mut() = new_headers;
+    *res.headers_mut() = split_headers(new_headers);
     *res.body_mut() = Body::from(page);
 
     if bare_pass_status.contains(&status.as_str()) {
