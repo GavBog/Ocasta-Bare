@@ -317,7 +317,7 @@ async fn index() -> Response<Body> {
 async fn main() {
     let app = Router::new()
         .route("/", get(index))
-        .route("/v3", any(proxy));
+        .route("/v3/", any(proxy));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     axum::Server::bind(&addr)
