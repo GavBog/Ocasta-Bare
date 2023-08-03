@@ -1,5 +1,5 @@
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::WebSocketUpgrade,
     http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
     response::IntoResponse,
@@ -23,14 +23,14 @@ async fn proxy(
         return websocket::proxy(ws, req).await.into_response();
     }
 
-    let url = headers
+    let url = if let Some(url) = headers
         .get("X-Bare-URL")
         .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-
-    if url.is_empty() {
-        return errors::error_response(StatusCode::BAD_REQUEST).into_response();
-    }
+    {
+        url
+    } else {
+        return index().await.into_response();
+    };
 
     let bare_headers = if let Ok(bare_headers) = join_headers(headers.clone()) {
         bare_headers
@@ -42,13 +42,13 @@ async fn proxy(
         if let Ok(bare_headers) = serde_json::from_str(bare_headers.to_str().unwrap_or_default()) {
             bare_headers
         } else {
-            return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+            Value::Object(serde_json::Map::new())
         };
 
     let bare_headers = if let Value::Object(bare_headers) = bare_headers {
         bare_headers
     } else {
-        return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+        serde_json::Map::new()
     };
 
     let mut new_headers = HeaderMap::new();
@@ -92,12 +92,11 @@ async fn proxy(
         _ => return errors::error_response(StatusCode::BAD_REQUEST).into_response(),
     };
 
-    let request = request_builder
+    let request = if let Ok(request) = request_builder
         .headers(new_headers)
         .body(req.into_body())
-        .build();
-
-    let request = if let Ok(request) = request {
+        .build()
+    {
         request
     } else {
         return errors::error_response(StatusCode::BAD_REQUEST).into_response();
@@ -106,7 +105,7 @@ async fn proxy(
     let response = if let Ok(response) = client.execute(request).await {
         response
     } else {
-        return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+        return errors::error_response(StatusCode::NOT_FOUND).into_response();
     };
 
     let status = response.status();
@@ -127,13 +126,13 @@ async fn proxy(
         if let Ok(response_headers_bare) = serde_json::to_string(&response_headers) {
             response_headers_bare
         } else {
-            return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+            "[]".to_string()
         };
 
     let page = if let Ok(page) = response.bytes().await {
         page
     } else {
-        return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+        Bytes::new()
     };
 
     new_headers.insert(
@@ -141,7 +140,7 @@ async fn proxy(
         if let Ok(content_length) = page.len().to_string().parse() {
             content_length
         } else {
-            return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+            HeaderValue::from_static("0")
         },
     );
     new_headers.insert(
@@ -149,7 +148,7 @@ async fn proxy(
         if let Ok(status) = status.as_str().parse() {
             status
         } else {
-            return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+            HeaderValue::from_static("200")
         },
     );
     new_headers.insert(
@@ -158,10 +157,10 @@ async fn proxy(
             if let Ok(status) = status.parse() {
                 status
             } else {
-                return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+                HeaderValue::from_static("OK")
             }
         } else {
-            return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+            HeaderValue::from_static("OK")
         },
     );
     new_headers.insert(
@@ -169,7 +168,7 @@ async fn proxy(
         if let Ok(response_headers_bare) = HeaderValue::from_str(&response_headers_bare) {
             response_headers_bare
         } else {
-            return errors::error_response(StatusCode::BAD_REQUEST).into_response();
+            HeaderValue::from_static("[]")
         },
     );
 
@@ -213,6 +212,15 @@ async fn proxy(
         .split(",")
         .collect::<Vec<&str>>();
 
+    for key in [
+        "access-control-allow-origin",
+        "access-control-allow-headers",
+        "access-control-allow-methods",
+        "access-control-expose-headers",
+    ] {
+        new_headers.insert(key, HeaderValue::from_static("*"));
+    }
+
     let mut res = Response::default();
     *res.headers_mut() = split_headers(new_headers);
     *res.body_mut() = Body::from(page);
@@ -225,10 +233,20 @@ async fn proxy(
 }
 
 async fn index() -> Response<Body> {
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+    for key in [
+        "access-control-allow-origin",
+        "access-control-allow-headers",
+        "access-control-allow-methods",
+        "access-control-expose-headers",
+    ] {
+        headers.insert(key, HeaderValue::from_static("*"));
+    }
+
     let mut res = Response::default();
     *res.body_mut() = include_str!("../static/index.json").into();
-    res.headers_mut()
-        .insert("Content-Type", HeaderValue::from_static("application/json"));
+    *res.headers_mut() = headers;
     res
 }
 
