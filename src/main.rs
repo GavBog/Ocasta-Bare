@@ -6,8 +6,7 @@ use axum::{
     routing::{any, get},
     Router,
 };
-use ocastaproxy::{
-    errors,
+use ocastabare::{
     util::{join_headers, split_headers},
     websocket,
 };
@@ -78,34 +77,22 @@ async fn proxy(
             }
         });
 
+    new_headers.remove("host");
+
     let client = reqwest::Client::new();
-    let request_builder = match req.method().as_str() {
-        "GET" => client.get(url.clone()),
-        "POST" => client.post(url.clone()),
-        "PUT" => client.put(url.clone()),
-        "DELETE" => client.delete(url.clone()),
-        "HEAD" => client.head(url.clone()),
-        "OPTIONS" => client.request(reqwest::Method::OPTIONS, url.clone()),
-        "CONNECT" => client.request(reqwest::Method::CONNECT, url.clone()),
-        "PATCH" => client.patch(url.clone()),
-        "TRACE" => client.request(reqwest::Method::TRACE, url.clone()),
-        _ => return errors::error_response(StatusCode::BAD_REQUEST).into_response(),
-    };
-
-    let request = if let Ok(request) = request_builder
+    let request_builder = client
+        .request(req.method().clone(), url)
         .headers(new_headers)
-        .body(req.into_body())
-        .build()
-    {
-        request
-    } else {
-        return errors::error_response(StatusCode::BAD_REQUEST).into_response();
-    };
+        .body(req.into_body());
 
-    let response = if let Ok(response) = client.execute(request).await {
+    let response = if let Ok(response) = request_builder.send().await {
         response
     } else {
-        return errors::error_response(StatusCode::NOT_FOUND).into_response();
+        let mut res = Response::default();
+        *res.status_mut() = StatusCode::BAD_REQUEST;
+        *res.body_mut() = Body::from("Bad Request");
+
+        return res.into_response();
     };
 
     let status = response.status();

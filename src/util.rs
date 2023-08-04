@@ -11,7 +11,11 @@ pub fn split_headers(headers: HeaderMap) -> HeaderMap {
                 let mut split = 0;
 
                 for i in (0..value.len()).step_by(3072) {
-                    let part = &value[i..i + 3072];
+                    let part = if i + 3072 > value.len() {
+                        &value[i..value.len()]
+                    } else {
+                        &value[i..i + 3072]
+                    };
 
                     let id = split;
                     output.insert(
@@ -22,7 +26,7 @@ pub fn split_headers(headers: HeaderMap) -> HeaderMap {
                         } else {
                             continue;
                         },
-                        if let Ok(value) = HeaderValue::from_str(format!("{};", part).as_str()) {
+                        if let Ok(value) = HeaderValue::from_str(format!(";{}", part).as_str()) {
                             value
                         } else {
                             continue;
