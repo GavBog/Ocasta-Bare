@@ -99,35 +99,51 @@ async fn proxy(
 
     let response_headers = response.headers().clone();
     let mut new_headers = HeaderMap::new();
-    if let Some(value) = response_headers.get("Content-Encoding") {
-        if let Ok(key) = HeaderName::from_bytes("Content-Encoding".as_bytes()) {
-            new_headers.insert(key, value.clone());
-        }
-    }
-    let response_headers: Vec<(&str, &str)> = response_headers
+
+    headers
+        .get("X-Bare-Pass-Headers")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(",")
+        .filter(|key| match *key {
+            "vary"
+            | "connection"
+            | "transfer-encoding"
+            | "access-control-allow-headers"
+            | "access-control-allow-methods"
+            | "access-control-expose-headers"
+            | "access-control-max-age"
+            | "access-control-request-headers"
+            | "access-control-request-method" => false,
+            _ => true,
+        })
+        .chain(vec!["content-encoding", "content-length", "last-modified"])
+        .for_each(|key| {
+            if let Some(value) = response_headers.get(key) {
+                if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+                    new_headers.insert(key, value.clone());
+                }
+            }
+        });
+
+    let response_headers_bare: Vec<(&str, &str)> = response_headers
         .iter()
         .map(|(key, value)| (key.as_str(), value.to_str().unwrap_or_default()))
         .collect();
 
     let response_headers_bare =
-        if let Ok(response_headers_bare) = serde_json::to_string(&response_headers) {
+        if let Ok(response_headers_bare) = serde_json::to_string(&response_headers_bare) {
             response_headers_bare
         } else {
             "[]".to_string()
         };
 
-    let page = if let Ok(page) = response.bytes().await {
-        page
-    } else {
-        Bytes::new()
-    };
-
     new_headers.insert(
-        "Content-Length",
-        if let Ok(content_length) = page.len().to_string().parse() {
-            content_length
+        "x-bare-headers",
+        if let Ok(response_headers_bare) = HeaderValue::from_str(&response_headers_bare) {
+            response_headers_bare
         } else {
-            HeaderValue::from_static("0")
+            HeaderValue::from_static("[]")
         },
     );
     new_headers.insert(
@@ -150,54 +166,6 @@ async fn proxy(
             HeaderValue::from_static("OK")
         },
     );
-    new_headers.insert(
-        "x-bare-headers",
-        if let Ok(response_headers_bare) = HeaderValue::from_str(&response_headers_bare) {
-            response_headers_bare
-        } else {
-            HeaderValue::from_static("[]")
-        },
-    );
-
-    let bare_pass_headers = headers
-        .get("X-Bare-Pass-Headers")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .split(",")
-        .filter(|key| match *key {
-            "vary"
-            | "connection"
-            | "transfer-encoding"
-            | "access-control-allow-headers"
-            | "access-control-allow-methods"
-            | "access-control-expose-headers"
-            | "access-control-max-age"
-            | "access-control-request-headers"
-            | "access-control-request-method" => false,
-            _ => true,
-        })
-        .collect::<Vec<&str>>();
-
-    if !bare_pass_headers.is_empty() {
-        for (key, value) in response_headers {
-            if !bare_pass_headers.contains(&key) {
-                continue;
-            }
-
-            if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
-                if let Ok(value) = HeaderValue::from_str(&value) {
-                    new_headers.insert(key, value);
-                }
-            }
-        }
-    }
-
-    let bare_pass_status = headers
-        .get("X-Bare-Pass-Status")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .split(",")
-        .collect::<Vec<&str>>();
 
     for key in [
         "access-control-allow-origin",
@@ -207,6 +175,19 @@ async fn proxy(
     ] {
         new_headers.insert(key, HeaderValue::from_static("*"));
     }
+
+    let page = if let Ok(page) = response.bytes().await {
+        page
+    } else {
+        Bytes::new()
+    };
+
+    let bare_pass_status = headers
+        .get("X-Bare-Pass-Status")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(",")
+        .collect::<Vec<&str>>();
 
     let mut res = Response::default();
     *res.headers_mut() = split_headers(new_headers);
