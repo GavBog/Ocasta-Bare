@@ -5,6 +5,7 @@ use axum::{
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
+use serde_json::{json, Value};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{http, Message as TungsteniteMessage},
@@ -21,33 +22,14 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         _ => return,
     };
     let msg = msg.into_text().unwrap_or_default();
-    let msg: Vec<(String, String)> = match serde_json::from_str(&msg) {
+    let msg: Value = match serde_json::from_str(msg.as_str()) {
         Ok(msg) => msg,
         _ => return,
     };
 
-    let url = if let Some(url) = msg
-        .iter()
-        .find(|(key, _)| key == "remote")
-        .map(|(_, value)| value)
-    {
-        url
-    } else {
-        return;
-    };
-
-    let default_json = String::from("[]");
-    let headers = if let Some(headers) = msg
-        .iter()
-        .find(|(key, _)| key == "headers")
-        .map(|(_, value)| value)
-    {
-        headers
-    } else {
-        &default_json
-    };
-    let headers: Vec<(String, String)> = match serde_json::from_str(&headers) {
-        Ok(headers) => headers,
+    let url = msg["remote"].as_str().unwrap_or_default();
+    let headers = match &msg["headers"] {
+        Value::Object(headers) => headers,
         _ => return,
     };
 
@@ -58,7 +40,7 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         } else {
             continue;
         };
-        let value = if let Ok(value) = HeaderValue::from_str(&value) {
+        let value = if let Ok(value) = HeaderValue::from_str(value.as_str().unwrap_or_default()) {
             value
         } else {
             continue;
@@ -66,27 +48,13 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         new_headers.insert(key, value);
     }
 
-    let forward_headers = if let Some(forward_headers) = msg
-        .iter()
-        .find(|(key, _)| key == "forwardHeaders")
-        .map(|(_, value)| value)
-    {
-        forward_headers
-    } else {
-        &default_json
+    let forward_headers = match &msg["forwardHeaders"] {
+        Value::Array(headers) => headers,
+        _ => return,
     };
 
-    let forward_headers = forward_headers
-        .split(',')
-        .filter(|key| match *key {
-            "connection" | "transfer-encoding" | "host" | "origin" | "referer" => false,
-            _ => true,
-        })
-        .chain(vec!["accept-encoding", "accept-language"])
-        .collect::<Vec<_>>();
-
     for key in forward_headers {
-        let key = if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+        let key = if let Ok(key) = key.as_str().unwrap_or_default().parse::<HeaderName>() {
             key
         } else {
             continue;
@@ -102,12 +70,31 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         .unwrap_or_default();
     *server.headers_mut() = new_headers;
 
-    let mut socket = match connect_async(server).await {
-        Ok((socket, _)) => socket,
+    let (mut socket, res) = match connect_async(server).await {
+        Ok((socket, res)) => (socket, res),
         _ => return,
     };
 
-    let msg = r#"{"type":"open","protocol":"","setCookies":[]}"#;
+    let protocol = res
+        .headers()
+        .get(http::header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+
+    let set_cookies = res
+        .headers()
+        .get_all(http::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+
+    let msg = json!({
+        "type": "open",
+        "protocol": protocol,
+        "setCookies": set_cookies,
+    });
+
     let _ = session.send(AxumMessage::Text(msg.to_string())).await;
 
     loop {
