@@ -54,7 +54,7 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     };
 
     for key in forward_headers {
-        let key = if let Ok(key) = key.as_str().unwrap_or_default().parse::<HeaderName>() {
+        let key: HeaderName = if let Ok(key) = key.as_str().unwrap_or_default().parse() {
             key
         } else {
             continue;
@@ -81,13 +81,13 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
 
-    let set_cookies = res
+    let set_cookies: Vec<String> = res
         .headers()
         .get_all(http::header::SET_COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .map(|value| value.to_string())
-        .collect::<Vec<_>>();
+        .collect();
 
     let msg = json!({
         "type": "open",

@@ -1,4 +1,25 @@
-use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use axum::{
+    body::Body,
+    http::{HeaderMap, HeaderName, HeaderValue, Response},
+};
+
+pub async fn index() -> Response<Body> {
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+    for key in [
+        "access-control-allow-origin",
+        "access-control-allow-headers",
+        "access-control-allow-methods",
+        "access-control-expose-headers",
+    ] {
+        headers.insert(key, HeaderValue::from_static("*"));
+    }
+
+    let mut res = Response::default();
+    *res.body_mut() = include_str!("../static/index.json").into();
+    *res.headers_mut() = headers;
+    res
+}
 
 pub fn split_headers(headers: HeaderMap) -> HeaderMap {
     let mut output = headers.clone();
@@ -64,7 +85,7 @@ pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
                 return Err(());
             }
 
-            let id = if let Ok(id) = key.as_str().replace("x-bare-headers-", "").parse::<usize>() {
+            let id: usize = if let Ok(id) = key.as_str().replace("x-bare-headers-", "").parse() {
                 id
             } else {
                 return Err(());
