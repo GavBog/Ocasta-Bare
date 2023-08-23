@@ -95,8 +95,6 @@ pub async fn proxy(
             }
         });
 
-    new_headers.remove("host");
-
     let client = reqwest::Client::new();
     let request_builder = client
         .request(req.method().clone(), url)
