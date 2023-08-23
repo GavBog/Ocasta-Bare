@@ -4,20 +4,41 @@ use crate::{
 };
 use axum::{
     body::{Body, Bytes},
-    extract::WebSocketUpgrade,
+    extract::{Query, WebSocketUpgrade},
     http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
     response::IntoResponse,
 };
 use serde_json::Value;
+use std::collections::HashMap;
 
 pub async fn proxy(
     headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
     ws: Option<WebSocketUpgrade>,
     req: Request<Body>,
 ) -> impl IntoResponse {
     if let Some(ws) = ws {
         return websocket::proxy(ws, req).await.into_response();
     }
+
+    let cache = query.contains_key("cache");
+    let base_pass_headers = if cache {
+        vec!["last-modified", "etag", "cache-control"]
+    } else {
+        vec![]
+    };
+    let base_forward_headers = if cache {
+        vec![
+            "accept-encoding",
+            "accept-language",
+            "if-modified-since",
+            "if-none-match",
+            "cache-control",
+        ]
+    } else {
+        vec!["accept-encoding", "accept-language"]
+    };
+    let base_pass_status = if cache { vec!["304"] } else { vec![] };
 
     let url = if let Some(url) = headers
         .get("X-Bare-URL")
@@ -65,7 +86,7 @@ pub async fn proxy(
             "connection" | "transfer-encoding" | "host" | "origin" | "referer" => false,
             _ => true,
         })
-        .chain(vec!["accept-encoding", "accept-language"])
+        .chain(base_forward_headers)
         .for_each(|key| {
             if let Some(value) = headers.get(key) {
                 if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
@@ -114,7 +135,7 @@ pub async fn proxy(
             | "access-control-request-method" => false,
             _ => true,
         })
-        .chain(vec!["content-encoding", "content-length", "last-modified"])
+        .chain(base_pass_headers)
         .for_each(|key| {
             if let Some(value) = response_headers.get(key) {
                 if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
@@ -184,6 +205,7 @@ pub async fn proxy(
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .split(",")
+        .chain(base_pass_status)
         .collect();
 
     let mut res = Response::default();
