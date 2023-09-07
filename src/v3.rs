@@ -22,23 +22,19 @@ pub async fn proxy(
     }
 
     let cache = query.contains_key("cache");
-    let base_pass_headers = if cache {
-        vec!["last-modified", "etag", "cache-control"]
-    } else {
-        vec![]
-    };
-    let base_forward_headers = if cache {
-        vec![
-            "accept-encoding",
-            "accept-language",
+    let mut base_forward_headers = vec!["accept-encoding", "accept-language"];
+    let mut base_pass_headers = vec!["content-encoding", "content-length", "last-modified"];
+    let mut base_pass_status = vec![];
+
+    if cache {
+        base_forward_headers.extend_from_slice(&[
             "if-modified-since",
             "if-none-match",
             "cache-control",
-        ]
-    } else {
-        vec!["accept-encoding", "accept-language"]
-    };
-    let base_pass_status = if cache { vec!["304"] } else { vec![] };
+        ]);
+        base_pass_headers.extend_from_slice(&["cache-control", "etag"]);
+        base_pass_status.extend_from_slice(&["304"]);
+    }
 
     let url = if let Some(url) = headers
         .get("X-Bare-URL")
@@ -94,6 +90,8 @@ pub async fn proxy(
                 }
             }
         });
+
+    new_headers.remove("host");
 
     let client = reqwest::Client::new();
     let request_builder = client
