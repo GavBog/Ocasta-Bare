@@ -16,6 +16,7 @@ pub async fn index() -> Response<Body> {
     ] {
         headers.insert(key, HeaderValue::from_static("*"));
     }
+
     let json = json!(
         {
             "versions": ["v3"],
