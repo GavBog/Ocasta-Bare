@@ -1,4 +1,4 @@
-use argh::{FromArgs, from_env};
+use argh::{from_env, FromArgs};
 use axum::{
     routing::{any, get},
     Router,
@@ -19,7 +19,7 @@ struct Init {
 
     /// the port number, defaults to 80
     #[argh(option, short = 'p', default = "80")]
-    port: u16
+    port: u16,
 }
 
 #[tokio::main]
@@ -31,12 +31,16 @@ async fn main() {
         addr_tuple.0[i] = num.parse::<u8>().unwrap();
     }
 
-    let app = Router::new()
-        .route(&init.directory, get(index))
-        .route("/v3/", any(v3::proxy));
+    let app = Router::new().route(&init.directory, get(index)).route(
+        format!(
+            "{}/v3/",
+            init.directory.strip_suffix("/").unwrap_or_default()
+        )
+        .as_str(),
+        any(v3::proxy),
+    );
 
     let addr = SocketAddr::from(addr_tuple);
-
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
