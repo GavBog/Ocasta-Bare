@@ -32,7 +32,7 @@ pub async fn index() -> Response<Body> {
               "email": "hello@projectocasta.org",
               "website": "https://www.projectocasta.org/",
               "repository": "https://github.com/Project-Ocasta/Ocasta-Bare",
-              "version": "1.0.0"
+              "version": "0.1.0"
             }
           }
     );

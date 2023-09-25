@@ -1,6 +1,9 @@
 [package]
 name = "ocastabare"
+description = "Rustified TompHTTP Bare Server"
+repository = "https://github.com/Project-Ocasta/Ocasta-Bare"
 version = "0.1.0"
+license = "GPL-3.0"
 edition = "2021"
 
 [dependencies]
