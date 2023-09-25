@@ -2,8 +2,8 @@ use axum::{
     body::Body,
     http::{HeaderMap, HeaderName, HeaderValue, Response},
 };
-use json::{object, stringify_pretty};
 use memory_stats::memory_stats;
+use serde_json::{json, to_string_pretty};
 
 pub async fn index() -> Response<Body> {
     let mut headers = HeaderMap::new();
@@ -16,26 +16,28 @@ pub async fn index() -> Response<Body> {
     ] {
         headers.insert(key, HeaderValue::from_static("*"));
     }
-    let json = object!{
-        versions: ["v3"],
-        language: "Rust",
-        memoryUsage: f64::from((memory_stats().unwrap().physical_mem as f64 / 1024.0 / 1024.0) * 100.0).round() / 100.0,
-        maintainer: {
-            email: "you@example.com",
-            website: "https://www.example.com"
-        },
-        project: {
-            name: "Ocasta-Bare",
-            description: "Rust TOMP Implementation",
-            email: "hello@projectocasta.org",
-            website: "https://projectocasta.org",
-            repository: "https://github.com/Project-Ocasta/Ocasta-Bare",
-            version: "1.0.0"
-        }
-    };
+    let json = json!(
+        {
+            "versions": ["v3"],
+            "language": "Rust",
+            "memoryUsage": f64::from((memory_stats().unwrap().physical_mem as f64 / 1024.0 / 1024.0) * 100.0).round() / 100.0,
+            "maintainer": {
+              "email": "you@example.com",
+              "website": "https://www.example.com/"
+            },
+            "project": {
+              "name": "Ocasta-Bare",
+              "description": "Rust TOMP implementation",
+              "email": "hello@projectocasta.org",
+              "website": "https://www.projectocasta.org/",
+              "repository": "https://github.com/Project-Ocasta/Ocasta-Bare",
+              "version": "1.0.0"
+            }
+          }
+    );
 
     let mut res = Response::default();
-    *res.body_mut() = stringify_pretty(json, 4).into();
+    *res.body_mut() = to_string_pretty(&json).unwrap_or_default().into();
     *res.headers_mut() = headers;
     res
 }
