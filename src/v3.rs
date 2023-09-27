@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
     response::IntoResponse,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 pub async fn proxy(
@@ -48,7 +48,7 @@ pub async fn proxy(
     let bare_headers = if let Ok(bare_headers) = join_headers(headers.clone()) {
         bare_headers
     } else {
-        HeaderValue::from_static("[]")
+        HeaderValue::from_static("{}")
     };
 
     let bare_headers =
@@ -140,24 +140,24 @@ pub async fn proxy(
             }
         });
 
-    let response_headers_bare: Vec<(&str, &str)> = response_headers
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.to_str().unwrap_or_default()))
-        .collect();
+    let mut response_headers_bare: HashMap<String, String> = HashMap::new();
+    for key in response_headers.keys() {
+        if let Some(value) = response_headers.get(key.as_str()) {
+            response_headers_bare.insert(
+                key.as_str().to_string(),
+                value.to_str().unwrap_or_default().to_string(),
+            );
+        }
+    }
 
-    let response_headers_bare =
-        if let Ok(response_headers_bare) = serde_json::to_string(&response_headers_bare) {
-            response_headers_bare
-        } else {
-            "[]".to_string()
-        };
+    let response_headers_bare = json!(response_headers_bare).to_string();
 
     new_headers.insert(
         "x-bare-headers",
         if let Ok(response_headers_bare) = HeaderValue::from_str(&response_headers_bare) {
             response_headers_bare
         } else {
-            HeaderValue::from_static("[]")
+            HeaderValue::from_static("{}")
         },
     );
     new_headers.insert(
