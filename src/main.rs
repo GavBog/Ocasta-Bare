@@ -1,10 +1,24 @@
 use argh::{from_env, FromArgs};
+#[cfg(feature = "proxy")]
+use axum::routing::any;
+#[cfg(feature = "v2")]
 use axum::{
-    routing::{any, get},
-    Router,
+    body::Body,
+    extract::Query,
+    extract::WebSocketUpgrade,
+    http::{HeaderMap, Request},
 };
-use ocastabare::{util::index, v3};
+use axum::{routing::get, Router};
+use ocastabare::util::index;
+#[cfg(feature = "v3")]
+use ocastabare::v3;
+#[cfg(feature = "v2")]
+use ocastabare::{util::db_manager, v2};
 use std::net::SocketAddr;
+#[cfg(feature = "v2")]
+use std::{collections::HashMap, sync::Arc};
+#[cfg(feature = "v2")]
+use tokio::sync::{mpsc, Mutex};
 
 #[derive(FromArgs)]
 /// Bare server init
@@ -31,7 +45,60 @@ async fn main() {
         addr_tuple.0[i] = num.parse::<u8>().unwrap();
     }
 
-    let app = Router::new().route(&init.directory, get(index)).route(
+    let mut app = Router::new();
+    app = app.route(&init.directory, get(index));
+
+    #[cfg(feature = "v2")]
+    {
+        let (tx, rx): (
+            mpsc::Sender<(String, String)>,
+            mpsc::Receiver<(String, String)>,
+        ) = mpsc::channel(1);
+        let db = Arc::new(Mutex::new(HashMap::new()));
+        let db1 = db.clone();
+        let db2 = db.clone();
+        tokio::spawn(async move { db_manager(db1, rx) });
+        app = app
+            .route(
+                format!(
+                    "{}/v2/",
+                    init.directory.strip_suffix("/").unwrap_or_default()
+                )
+                .as_str(),
+                any(
+                    move |headers: HeaderMap,
+                          Query(query): Query<HashMap<String, String>>,
+                          ws: Option<WebSocketUpgrade>,
+                          req: Request<Body>| {
+                        v2::proxy(headers, axum::extract::Query(query), ws, req, db2.clone())
+                    },
+                ),
+            )
+            .route(
+                format!(
+                    "{}/v2/ws-new-meta/",
+                    init.directory.strip_suffix("/").unwrap_or_default()
+                )
+                .as_str(),
+                get(move |headers: HeaderMap| {
+                    let tx = tx.clone();
+                    v2::ws_new_meta(headers, tx)
+                }),
+            )
+            .route(
+                format!(
+                    "{}/v2/ws-meta/",
+                    init.directory.strip_suffix("/").unwrap_or_default()
+                )
+                .as_str(),
+                get(move |headers: HeaderMap| {
+                    let map = db.clone();
+                    v2::ws_meta(headers, map)
+                }),
+            );
+    }
+    #[cfg(feature = "v3")]
+    let app = app.route(
         format!(
             "{}/v3/",
             init.directory.strip_suffix("/").unwrap_or_default()

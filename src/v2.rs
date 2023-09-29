@@ -9,20 +9,28 @@ use axum::{
     response::IntoResponse,
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{mpsc::Sender, Mutex};
 
 pub async fn proxy(
     headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
     ws: Option<WebSocketUpgrade>,
     req: Request<Body>,
+    map: Arc<Mutex<HashMap<String, String>>>,
 ) -> impl IntoResponse {
     if let Some(ws) = ws {
-        return websocket::v3(ws, req).await.into_response();
+        return websocket::v2(ws, req, map).await.into_response();
     }
 
     let cache = query.contains_key("cache");
-    let mut base_forward_headers = vec!["accept-encoding", "accept-language"];
+    let mut base_forward_headers = vec![
+        "accept-encoding",
+        "accept-language",
+        "sec-websocket-extensions",
+        "sec-websocket-key",
+        "sec-websocket-version",
+    ];
     let mut base_pass_headers = vec!["content-encoding", "content-length", "last-modified"];
     let mut base_pass_status = vec![];
 
@@ -36,19 +44,49 @@ pub async fn proxy(
         base_pass_status.extend_from_slice(&["304"]);
     }
 
-    let url = if let Some(url) = headers
-        .get("X-Bare-URL")
+    let protocol = if let Some(protocol) = headers
+        .get("X-Bare-Protocol")
         .and_then(|value| value.to_str().ok())
     {
-        url
+        protocol
+    } else {
+        return index().await.into_response();
+    };
+    let host = if let Some(host) = headers
+        .get("X-Bare-Host")
+        .and_then(|value| value.to_str().ok())
+    {
+        host
+    } else {
+        if let Some(host) = headers.get("host").and_then(|value| value.to_str().ok()) {
+            host
+        } else {
+            return index().await.into_response();
+        }
+    };
+    let port = if let Some(port) = headers
+        .get("X-Bare-Port")
+        .and_then(|value| value.to_str().ok())
+    {
+        port
+    } else {
+        return index().await.into_response();
+    };
+    let path = if let Some(path) = headers
+        .get("X-Bare-Path")
+        .and_then(|value| value.to_str().ok())
+    {
+        path
     } else {
         return index().await.into_response();
     };
 
+    let url = format!("{}//{}:{}{}", protocol, host, port, path);
+
     let bare_headers = if let Ok(bare_headers) = join_headers(headers.clone()) {
         bare_headers
     } else {
-        HeaderValue::from_static("{}")
+        HeaderValue::from_static("[]")
     };
 
     let bare_headers =
@@ -157,7 +195,7 @@ pub async fn proxy(
         if let Ok(response_headers_bare) = HeaderValue::from_str(&response_headers_bare) {
             response_headers_bare
         } else {
-            HeaderValue::from_static("{}")
+            HeaderValue::from_static("[]")
         },
     );
     new_headers.insert(
@@ -211,6 +249,138 @@ pub async fn proxy(
     if bare_pass_status.contains(&status.as_str()) {
         *res.status_mut() = status;
     }
+
+    res.into_response()
+}
+
+pub async fn ws_new_meta(headers: HeaderMap, tx: Sender<(String, String)>) -> impl IntoResponse {
+    let bare_headers = if let Ok(bare_headers) = join_headers(headers.clone()) {
+        bare_headers
+    } else {
+        HeaderValue::from_static("[]")
+    };
+
+    let bare_headers =
+        if let Ok(bare_headers) = serde_json::from_str(bare_headers.to_str().unwrap_or_default()) {
+            bare_headers
+        } else {
+            Value::Object(serde_json::Map::new())
+        };
+
+    let bare_headers = if let Value::Object(bare_headers) = bare_headers {
+        bare_headers
+    } else {
+        serde_json::Map::new()
+    };
+
+    let mut forward_headers = HeaderMap::new();
+    let base_forward_headers = vec![
+        "accept-encoding",
+        "accept-language",
+        "sec-websocket-extensions",
+        "sec-websocket-key",
+        "sec-websocket-version",
+    ];
+
+    headers
+        .get("X-Bare-Forward-Headers")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(",")
+        .filter(|key| match *key {
+            "connection" | "transfer-encoding" | "host" | "origin" | "referer" => false,
+            _ => true,
+        })
+        .chain(base_forward_headers)
+        .for_each(|key| {
+            if let Some(value) = headers.get(key) {
+                if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+                    forward_headers.insert(key, value.clone());
+                }
+            }
+        });
+
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).unwrap();
+    let id = hex::encode(bytes);
+
+    let protocol = if let Some(protocol) = headers
+        .get("X-Bare-Protocol")
+        .and_then(|value| value.to_str().ok())
+    {
+        protocol
+    } else {
+        return index().await.into_response();
+    };
+    let host = if let Some(host) = headers
+        .get("X-Bare-Host")
+        .and_then(|value| value.to_str().ok())
+    {
+        host
+    } else {
+        if let Some(host) = headers.get("host").and_then(|value| value.to_str().ok()) {
+            host
+        } else {
+            return index().await.into_response();
+        }
+    };
+    let port = if let Some(port) = headers
+        .get("X-Bare-Port")
+        .and_then(|value| value.to_str().ok())
+    {
+        port
+    } else {
+        return index().await.into_response();
+    };
+    let path = if let Some(path) = headers
+        .get("X-Bare-Path")
+        .and_then(|value| value.to_str().ok())
+    {
+        path
+    } else {
+        return index().await.into_response();
+    };
+
+    let url = format!("{}//{}:{}{}", protocol, host, port, path);
+
+    let data = json!({
+        "expires": chrono::Utc::now().timestamp_millis() + 30000,
+        "value": {
+            "v": "2",
+            "remote": url,
+            "sendHeaders": bare_headers,
+            "forwardHeaders": forward_headers.iter().map(|(key, value)| (key.as_str(), value.to_str().unwrap_or_default())).collect::<Vec<(&str, &str)>>(),
+        },
+    });
+
+    tx.send((id, data.to_string())).await.unwrap();
+    let mut res = Response::default();
+    *res.body_mut() = Body::empty();
+
+    res.into_response()
+}
+
+pub async fn ws_meta(
+    headers: HeaderMap,
+    map: Arc<Mutex<HashMap<String, String>>>,
+) -> impl IntoResponse {
+    let id = if let Some(id) = headers
+        .get("X-Bare-ID")
+        .and_then(|value| value.to_str().ok())
+    {
+        id
+    } else {
+        return index().await.into_response();
+    };
+    let mut map = map.lock().await;
+    let data = if let Some(data) = map.remove(id) {
+        data
+    } else {
+        return index().await.into_response();
+    };
+
+    let mut res = Response::default();
+    *res.body_mut() = Body::from(data);
 
     res.into_response()
 }

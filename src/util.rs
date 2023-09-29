@@ -4,6 +4,10 @@ use axum::{
 };
 use memory_stats::memory_stats;
 use serde_json::{json, to_string_pretty};
+#[cfg(feature = "v2")]
+use std::{collections::HashMap, sync::Arc};
+#[cfg(feature = "v2")]
+use tokio::sync::{mpsc::Receiver, Mutex};
 
 pub async fn index() -> Response<Body> {
     let mut headers = HeaderMap::new();
@@ -16,10 +20,22 @@ pub async fn index() -> Response<Body> {
     ] {
         headers.insert(key, HeaderValue::from_static("*"));
     }
+    let mut versions = vec![];
+
+    if !cfg!(feature = "proxy") {
+        versions.push("None");
+    }
+
+    #[cfg(feature = "v1")]
+    versions.push("v1");
+    #[cfg(feature = "v2")]
+    versions.push("v2");
+    #[cfg(feature = "v3")]
+    versions.push("v3");
 
     let json = json!(
         {
-            "versions": ["v3"],
+            "versions": versions,
             "language": "Rust",
             "memoryUsage": f64::from((memory_stats().unwrap().physical_mem as f64 / 1024.0 / 1024.0) * 100.0).round() / 100.0,
             "maintainer": {
@@ -127,5 +143,25 @@ pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
         return Ok(output);
     } else {
         return Err(());
+    }
+}
+
+#[cfg(feature = "v2")]
+pub async fn db_manager(
+    db: Arc<Mutex<HashMap<String, String>>>,
+    mut rx: Receiver<(String, String)>,
+) {
+    loop {
+        let (key, value) = rx.recv().await.unwrap();
+        let key1 = key.clone();
+        let mut db1 = db.lock().await;
+        let db3 = db.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(30000)).await;
+            let mut db = db3.lock().await;
+            db.remove(&key1);
+        });
+
+        db1.insert(key, value);
     }
 }

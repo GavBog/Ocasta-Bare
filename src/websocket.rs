@@ -6,17 +6,23 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+#[cfg(feature = "v2")]
+use std::{collections::HashMap, sync::Arc};
+#[cfg(feature = "v2")]
+use tokio::sync::Mutex;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{http, Message as TungsteniteMessage},
 };
 
-pub async fn proxy(ws: WebSocketUpgrade, req: Request<Body>) -> impl IntoResponse {
+#[cfg(feature = "v3")]
+pub async fn v3(ws: WebSocketUpgrade, req: Request<Body>) -> impl IntoResponse {
     let headers = req.headers().clone();
-    ws.on_upgrade(move |session| handle_socket(session, headers))
+    ws.on_upgrade(move |session| v3_handle_socket(session, headers))
 }
 
-async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
+#[cfg(feature = "v3")]
+async fn v3_handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     let msg = match session.next().await {
         Some(Ok(msg)) => msg,
         _ => return,
@@ -96,6 +102,117 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     });
 
     let _ = session.send(AxumMessage::Text(msg.to_string())).await;
+
+    loop {
+        tokio::select! {
+            Some(Ok(msg)) = session.next() => {
+                let msg = axum_message_handler(msg);
+                if msg == TungsteniteMessage::Close(None) {
+                    let _ = socket.send(msg).await;
+                    break;
+                }
+                if let Err(_) = socket.send(msg).await {
+                    break;
+                }
+            },
+            Some(Ok(msg)) = socket.next() => {
+                let msg = tungstenite_message_handler(msg);
+                if msg == AxumMessage::Close(None) {
+                    let _ = session.send(msg).await;
+                    break;
+                }
+                if let Err(_) = session.send(msg).await {
+                    break;
+                }
+            },
+            else => break,
+        }
+    }
+
+    let _ = socket.close(None).await;
+    let _ = session.close().await;
+}
+
+#[cfg(feature = "v2")]
+pub async fn v2(
+    ws: WebSocketUpgrade,
+    req: Request<Body>,
+    map: Arc<Mutex<HashMap<String, String>>>,
+) -> impl IntoResponse {
+    let headers = req.headers().clone();
+    ws.on_upgrade(move |session| v2_handle_socket(session, headers, map))
+}
+
+#[cfg(feature = "v2")]
+async fn v2_handle_socket(
+    mut session: WebSocket,
+    req_headers: HeaderMap,
+    map: Arc<Mutex<HashMap<String, String>>>,
+) {
+    let id = if let Some(id) = req_headers.get("sec-websocket-protocol") {
+        id
+    } else {
+        return;
+    };
+
+    let id = id.to_str().unwrap_or_default();
+    let map = map.lock().await;
+    let value = if let Some(value) = map.get(id) {
+        value
+    } else {
+        return;
+    };
+    let value: Value = match serde_json::from_str(value) {
+        Ok(msg) => msg,
+        _ => return,
+    };
+
+    let url = value["remote"].as_str().unwrap_or_default();
+    let headers = match &value["headers"] {
+        Value::Object(headers) => headers,
+        _ => return,
+    };
+
+    let mut new_headers = HeaderMap::new();
+    for (key, value) in headers {
+        let key = if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+            key
+        } else {
+            continue;
+        };
+        let value = if let Ok(value) = HeaderValue::from_str(value.as_str().unwrap_or_default()) {
+            value
+        } else {
+            continue;
+        };
+        new_headers.insert(key, value);
+    }
+    let forward_headers = match &value["forwardHeaders"] {
+        Value::Array(headers) => headers,
+        _ => return,
+    };
+
+    for key in forward_headers {
+        let key: HeaderName = if let Ok(key) = key.as_str().unwrap_or_default().parse() {
+            key
+        } else {
+            continue;
+        };
+        if let Some(value) = req_headers.get(&key) {
+            new_headers.insert(key, value.clone());
+        }
+    }
+
+    let mut server = http::Request::builder()
+        .uri(url)
+        .body(())
+        .unwrap_or_default();
+    *server.headers_mut() = new_headers;
+
+    let (mut socket, _) = match connect_async(server).await {
+        Ok((socket, res)) => (socket, res),
+        _ => return,
+    };
 
     loop {
         tokio::select! {
