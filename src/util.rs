@@ -4,10 +4,6 @@ use axum::{
 };
 use memory_stats::memory_stats;
 use serde_json::{json, to_string_pretty};
-#[cfg(feature = "v2")]
-use std::{collections::HashMap, sync::Arc};
-#[cfg(feature = "v2")]
-use tokio::sync::{mpsc::Receiver, Mutex};
 
 pub async fn index() -> Response<Body> {
     let mut headers = HeaderMap::new();
@@ -116,7 +112,7 @@ pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
         new_headers.insert(key, value.clone());
     }
 
-    if new_headers.len() > 0 {
+    return if new_headers.len() > 0 {
         let mut join = vec![];
         for (key, value) in headers.iter() {
             if !value.to_str().unwrap_or_default().starts_with(';') {
@@ -140,28 +136,8 @@ pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
             return Err(());
         };
 
-        return Ok(output);
+        Ok(output)
     } else {
-        return Err(());
-    }
-}
-
-#[cfg(feature = "v2")]
-pub async fn db_manager(
-    db: Arc<Mutex<HashMap<String, String>>>,
-    mut rx: Receiver<(String, String)>,
-) {
-    loop {
-        let (key, value) = rx.recv().await.unwrap();
-        let key1 = key.clone();
-        let mut db1 = db.lock().await;
-        let db3 = db.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(30000)).await;
-            let mut db = db3.lock().await;
-            db.remove(&key1);
-        });
-
-        db1.insert(key, value);
-    }
+        Err(())
+    };
 }

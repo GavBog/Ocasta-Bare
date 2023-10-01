@@ -9,7 +9,7 @@ edition = "2021"
 [features]
 default = ["v2", "v3"]
 v1 = ["proxy"]
-v2 = ["proxy", "chrono", "getrandom", "hex"]
+v2 = ["proxy", "chrono", "dashmap", "getrandom", "hex"]
 v3 = ["proxy"]
 proxy = ["reqwest", "axum/ws", "tokio-tungstenite", "futures-util"]
 
@@ -17,6 +17,7 @@ proxy = ["reqwest", "axum/ws", "tokio-tungstenite", "futures-util"]
 argh = "0.1"
 axum = "0.6"
 chrono = { version = "0.4", optional = true }
+dashmap = { version = "5", optional = true }
 futures-util = { version = "0.3", optional = true }
 memory-stats = "1"
 getrandom = { version = "0.2", optional = true }

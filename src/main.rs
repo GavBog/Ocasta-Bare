@@ -10,15 +10,13 @@ use axum::{
 };
 use axum::{routing::get, Router};
 use ocastabare::util::index;
+#[cfg(feature = "v2")]
+use ocastabare::v2;
 #[cfg(feature = "v3")]
 use ocastabare::v3;
-#[cfg(feature = "v2")]
-use ocastabare::{util::db_manager, v2};
 use std::net::SocketAddr;
 #[cfg(feature = "v2")]
 use std::{collections::HashMap, sync::Arc};
-#[cfg(feature = "v2")]
-use tokio::sync::{mpsc, Mutex};
 
 #[derive(FromArgs)]
 /// Bare server init
@@ -50,14 +48,9 @@ async fn main() {
 
     #[cfg(feature = "v2")]
     {
-        let (tx, rx): (
-            mpsc::Sender<(String, String)>,
-            mpsc::Receiver<(String, String)>,
-        ) = mpsc::channel(1);
-        let db = Arc::new(Mutex::new(HashMap::new()));
+        let db = Arc::new(dashmap::DashMap::new());
         let db1 = db.clone();
         let db2 = db.clone();
-        tokio::spawn(async move { db_manager(db1, rx) });
         app = app
             .route(
                 format!(
@@ -70,7 +63,7 @@ async fn main() {
                           Query(query): Query<HashMap<String, String>>,
                           ws: Option<WebSocketUpgrade>,
                           req: Request<Body>| {
-                        v2::proxy(headers, axum::extract::Query(query), ws, req, db2.clone())
+                        v2::proxy(headers, Query(query), ws, req, db1)
                     },
                 ),
             )
@@ -80,10 +73,7 @@ async fn main() {
                     init.directory.strip_suffix("/").unwrap_or_default()
                 )
                 .as_str(),
-                get(move |headers: HeaderMap| {
-                    let tx = tx.clone();
-                    v2::ws_new_meta(headers, tx)
-                }),
+                get(move |headers: HeaderMap| v2::ws_new_meta(headers, db2)),
             )
             .route(
                 format!(
@@ -91,10 +81,7 @@ async fn main() {
                     init.directory.strip_suffix("/").unwrap_or_default()
                 )
                 .as_str(),
-                get(move |headers: HeaderMap| {
-                    let map = db.clone();
-                    v2::ws_meta(headers, map)
-                }),
+                get(move |headers: HeaderMap| v2::ws_meta(headers, db)),
             );
     }
     #[cfg(feature = "v3")]

@@ -8,16 +8,16 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
     response::IntoResponse,
 };
+use dashmap::DashMap;
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{mpsc::Sender, Mutex};
 
 pub async fn proxy(
     headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
     ws: Option<WebSocketUpgrade>,
     req: Request<Body>,
-    map: Arc<Mutex<HashMap<String, String>>>,
+    map: Arc<DashMap<String, String>>,
 ) -> impl IntoResponse {
     if let Some(ws) = ws {
         return websocket::v2(ws, req, map).await.into_response();
@@ -253,7 +253,10 @@ pub async fn proxy(
     res.into_response()
 }
 
-pub async fn ws_new_meta(headers: HeaderMap, tx: Sender<(String, String)>) -> impl IntoResponse {
+pub async fn ws_new_meta(
+    headers: HeaderMap,
+    map: Arc<DashMap<String, String>>,
+) -> impl IntoResponse {
     let bare_headers = if let Ok(bare_headers) = join_headers(headers.clone()) {
         bare_headers
     } else {
@@ -353,17 +356,18 @@ pub async fn ws_new_meta(headers: HeaderMap, tx: Sender<(String, String)>) -> im
         },
     });
 
-    tx.send((id, data.to_string())).await.unwrap();
+    map.insert(id.clone(), data.to_string());
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(30000)).await;
+        map.remove(&id);
+    });
     let mut res = Response::default();
     *res.body_mut() = Body::empty();
 
     res.into_response()
 }
 
-pub async fn ws_meta(
-    headers: HeaderMap,
-    map: Arc<Mutex<HashMap<String, String>>>,
-) -> impl IntoResponse {
+pub async fn ws_meta(headers: HeaderMap, map: Arc<DashMap<String, String>>) -> impl IntoResponse {
     let id = if let Some(id) = headers
         .get("X-Bare-ID")
         .and_then(|value| value.to_str().ok())
@@ -372,12 +376,12 @@ pub async fn ws_meta(
     } else {
         return index().await.into_response();
     };
-    let mut map = map.lock().await;
     let data = if let Some(data) = map.remove(id) {
         data
     } else {
         return index().await.into_response();
-    };
+    }
+    .1;
 
     let mut res = Response::default();
     *res.body_mut() = Body::from(data);

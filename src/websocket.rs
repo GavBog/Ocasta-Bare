@@ -4,12 +4,14 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, Request},
     response::IntoResponse,
 };
+#[cfg(feature = "v2")]
+use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+#[cfg(feature = "v3")]
+use serde_json::json;
+use serde_json::Value;
 #[cfg(feature = "v2")]
-use std::{collections::HashMap, sync::Arc};
-#[cfg(feature = "v2")]
-use tokio::sync::Mutex;
+use std::sync::Arc;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{http, Message as TungsteniteMessage},
@@ -137,7 +139,7 @@ async fn v3_handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
 pub async fn v2(
     ws: WebSocketUpgrade,
     req: Request<Body>,
-    map: Arc<Mutex<HashMap<String, String>>>,
+    map: Arc<DashMap<String, String>>,
 ) -> impl IntoResponse {
     let headers = req.headers().clone();
     ws.on_upgrade(move |session| v2_handle_socket(session, headers, map))
@@ -147,7 +149,7 @@ pub async fn v2(
 async fn v2_handle_socket(
     mut session: WebSocket,
     req_headers: HeaderMap,
-    map: Arc<Mutex<HashMap<String, String>>>,
+    map: Arc<DashMap<String, String>>,
 ) {
     let id = if let Some(id) = req_headers.get("sec-websocket-protocol") {
         id
@@ -156,13 +158,12 @@ async fn v2_handle_socket(
     };
 
     let id = id.to_str().unwrap_or_default();
-    let map = map.lock().await;
     let value = if let Some(value) = map.get(id) {
         value
     } else {
         return;
     };
-    let value: Value = match serde_json::from_str(value) {
+    let value: Value = match serde_json::from_str(&value.clone()) {
         Ok(msg) => msg,
         _ => return,
     };
