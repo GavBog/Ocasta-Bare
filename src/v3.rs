@@ -77,11 +77,8 @@ pub async fn proxy(
         .get("X-Bare-Forward-Headers")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
-        .split(",")
-        .filter(|key| match *key {
-            "connection" | "transfer-encoding" | "host" | "origin" | "referer" => false,
-            _ => true,
-        })
+        .split(',')
+        .filter(|key| !matches!(*key, "connection" | "transfer-encoding" | "host" | "origin" | "referer"))
         .chain(base_forward_headers)
         .for_each(|key| {
             if let Some(value) = headers.get(key) {
@@ -118,9 +115,8 @@ pub async fn proxy(
         .get("X-Bare-Pass-Headers")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
-        .split(",")
-        .filter(|key| match *key {
-            "vary"
+        .split(',')
+        .filter(|key| !matches!(*key, "vary"
             | "connection"
             | "transfer-encoding"
             | "access-control-allow-headers"
@@ -128,9 +124,7 @@ pub async fn proxy(
             | "access-control-expose-headers"
             | "access-control-max-age"
             | "access-control-request-headers"
-            | "access-control-request-method" => false,
-            _ => true,
-        })
+            | "access-control-request-method"))
         .chain(base_pass_headers)
         .for_each(|key| {
             if let Some(value) = response_headers.get(key) {
@@ -200,7 +194,7 @@ pub async fn proxy(
         .get("X-Bare-Pass-Status")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
-        .split(",")
+        .split(',')
         .chain(base_pass_status)
         .collect();
 

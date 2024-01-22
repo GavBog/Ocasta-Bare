@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderName, HeaderValue, Response},
@@ -17,11 +18,12 @@ pub async fn index() -> Response<Body> {
         headers.insert(key, HeaderValue::from_static("*"));
     }
 
+    let memory = ((memory_stats().unwrap().physical_mem as f64 / 1024.0 / 1024.0) * 100.0).round() / 100.0;
     let json = json!(
         {
             "versions": ["v3"],
             "language": "Rust",
-            "memoryUsage": f64::from((memory_stats().unwrap().physical_mem as f64 / 1024.0 / 1024.0) * 100.0).round() / 100.0,
+            "memoryUsage": memory,
             "maintainer": {
               "email": "you@example.com",
               "website": "https://www.example.com/"
@@ -84,7 +86,7 @@ pub fn split_headers(headers: HeaderMap) -> HeaderMap {
     output
 }
 
-pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
+pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue> {
     if headers.contains_key("x-bare-headers") {
         return Ok(headers
             .get("x-bare-headers")
@@ -100,20 +102,20 @@ pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
         new_headers.insert(key, value.clone());
     }
 
-    if new_headers.len() > 0 {
+    return if !new_headers.is_empty() {
         let mut join = vec![];
         for (key, value) in headers.iter() {
             if !value.to_str().unwrap_or_default().starts_with(';') {
-                return Err(());
+                return Err(anyhow!("Invalid header value"));
             }
 
             let id: usize = if let Ok(id) = key.as_str().replace("x-bare-headers-", "").parse() {
                 id
             } else {
-                return Err(());
+                return Err(anyhow!("Invalid header value"));
             };
 
-            join[id] = value.to_str().unwrap_or_default().replace(";", "");
+            join[id] = value.to_str().unwrap_or_default().replace(';', "");
 
             new_headers.remove(key);
         }
@@ -121,11 +123,11 @@ pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue, ()> {
         let output = if let Ok(output) = HeaderValue::from_str(join.join("").as_str()) {
             output
         } else {
-            return Err(());
+            return Err(anyhow!("Invalid header value"));
         };
 
-        return Ok(output);
+        Ok(output)
     } else {
-        return Err(());
-    }
+        Ok(HeaderValue::from_static("{}"))
+    };
 }

@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
-    http::{HeaderMap, HeaderName, HeaderValue, Request},
+    http::{HeaderMap, Request},
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -33,14 +33,14 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         _ => return,
     };
 
-    let mut new_headers = HeaderMap::new();
+    let mut new_headers = http::header::HeaderMap::new();
     for (key, value) in headers {
-        let key = if let Ok(key) = HeaderName::from_bytes(key.as_bytes()) {
+        let key = if let Ok(key) = http::header::HeaderName::from_bytes(key.as_bytes()) {
             key
         } else {
             continue;
         };
-        let value = if let Ok(value) = HeaderValue::from_str(value.as_str().unwrap_or_default()) {
+        let value = if let Ok(value) = http::header::HeaderValue::from_str(value.as_str().unwrap_or_default()) {
             value
         } else {
             continue;
@@ -54,12 +54,17 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     };
 
     for key in forward_headers {
-        let key: HeaderName = if let Ok(key) = key.as_str().unwrap_or_default().parse() {
+        let key: http::header::HeaderName = if let Ok(key) = key.as_str().unwrap_or_default().parse() {
             key
         } else {
             continue;
         };
-        if let Some(value) = req_headers.get(&key) {
+        if let Some(value) = req_headers.get(key.as_str()) {
+            let value: http::header::HeaderValue = if let Ok(value) = value.to_str().unwrap_or_default().parse() {
+                value
+            } else {
+                continue;
+            };
             new_headers.insert(key, value.clone());
         }
     }
@@ -100,22 +105,22 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     loop {
         tokio::select! {
             Some(Ok(msg)) = session.next() => {
-                let msg = axum_message_handler(msg);
+                let msg = axum_message_handler(msg.clone());
                 if msg == TungsteniteMessage::Close(None) {
                     let _ = socket.send(msg).await;
                     break;
                 }
-                if let Err(_) = socket.send(msg).await {
+                if socket.send(msg).await.is_err() {
                     break;
                 }
             },
             Some(Ok(msg)) = socket.next() => {
-                let msg = tungstenite_message_handler(msg);
+                let msg = tungstenite_message_handler(msg.clone());
                 if msg == AxumMessage::Close(None) {
                     let _ = session.send(msg).await;
                     break;
                 }
-                if let Err(_) = session.send(msg).await {
+                if session.send(msg).await.is_err() {
                     break;
                 }
             },

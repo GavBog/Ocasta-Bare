@@ -34,7 +34,7 @@ async fn main() {
     let app = Router::new().route(&init.directory, get(index)).route(
         format!(
             "{}/v3/",
-            init.directory.strip_suffix("/").unwrap_or_default()
+            init.directory.strip_suffix('/').unwrap_or_default()
         )
         .as_str(),
         any(v3::proxy),
