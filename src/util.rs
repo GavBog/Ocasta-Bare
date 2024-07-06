@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderName, HeaderValue, Response},
