@@ -78,7 +78,12 @@ pub async fn proxy(
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .split(',')
-        .filter(|key| !matches!(*key, "connection" | "transfer-encoding" | "host" | "origin" | "referer"))
+        .filter(|key| {
+            !matches!(
+                *key,
+                "connection" | "transfer-encoding" | "host" | "origin" | "referer"
+            )
+        })
         .chain(base_forward_headers)
         .for_each(|key| {
             if let Some(value) = headers.get(key) {
@@ -116,15 +121,20 @@ pub async fn proxy(
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .split(',')
-        .filter(|key| !matches!(*key, "vary"
-            | "connection"
-            | "transfer-encoding"
-            | "access-control-allow-headers"
-            | "access-control-allow-methods"
-            | "access-control-expose-headers"
-            | "access-control-max-age"
-            | "access-control-request-headers"
-            | "access-control-request-method"))
+        .filter(|key| {
+            !matches!(
+                *key,
+                "vary"
+                    | "connection"
+                    | "transfer-encoding"
+                    | "access-control-allow-headers"
+                    | "access-control-allow-methods"
+                    | "access-control-expose-headers"
+                    | "access-control-max-age"
+                    | "access-control-request-headers"
+                    | "access-control-request-method"
+            )
+        })
         .chain(base_pass_headers)
         .for_each(|key| {
             if let Some(value) = response_headers.get(key) {

@@ -40,7 +40,9 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
         } else {
             continue;
         };
-        let value = if let Ok(value) = http::header::HeaderValue::from_str(value.as_str().unwrap_or_default()) {
+        let value = if let Ok(value) =
+            http::header::HeaderValue::from_str(value.as_str().unwrap_or_default())
+        {
             value
         } else {
             continue;
@@ -54,17 +56,19 @@ async fn handle_socket(mut session: WebSocket, req_headers: HeaderMap) {
     };
 
     for key in forward_headers {
-        let key: http::header::HeaderName = if let Ok(key) = key.as_str().unwrap_or_default().parse() {
-            key
-        } else {
-            continue;
-        };
-        if let Some(value) = req_headers.get(key.as_str()) {
-            let value: http::header::HeaderValue = if let Ok(value) = value.to_str().unwrap_or_default().parse() {
-                value
+        let key: http::header::HeaderName =
+            if let Ok(key) = key.as_str().unwrap_or_default().parse() {
+                key
             } else {
                 continue;
             };
+        if let Some(value) = req_headers.get(key.as_str()) {
+            let value: http::header::HeaderValue =
+                if let Ok(value) = value.to_str().unwrap_or_default().parse() {
+                    value
+                } else {
+                    continue;
+                };
             new_headers.insert(key, value.clone());
         }
     }

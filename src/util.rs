@@ -18,7 +18,8 @@ pub async fn index() -> Response<Body> {
         headers.insert(key, HeaderValue::from_static("*"));
     }
 
-    let memory = ((memory_stats().unwrap().physical_mem as f64 / 1024.0 / 1024.0) * 100.0).round() / 100.0;
+    let memory =
+        ((memory_stats().unwrap().physical_mem as f64 / 1024.0 / 1024.0) * 100.0).round() / 100.0;
     let json = json!(
         {
             "versions": ["v3"],
@@ -87,47 +88,27 @@ pub fn split_headers(headers: HeaderMap) -> HeaderMap {
 }
 
 pub fn join_headers(headers: HeaderMap) -> Result<HeaderValue> {
-    if headers.contains_key("x-bare-headers") {
-        return Ok(headers
-            .get("x-bare-headers")
-            .unwrap_or(&HeaderValue::from_static("[]"))
-            .clone());
-    }
+    let mut output = headers.clone();
 
-    let mut new_headers = HeaderMap::new();
-    for (key, value) in headers.iter() {
-        if !key.as_str().starts_with("x-bare-headers-") {
-            continue;
-        }
-        new_headers.insert(key, value.clone());
-    }
-
-    return if !new_headers.is_empty() {
-        let mut join = vec![];
+    if headers.contains_key("x-bare-headers-0") {
+        let mut join = vec!["".to_string(); headers.len()];
         for (key, value) in headers.iter() {
-            if !value.to_str().unwrap_or_default().starts_with(';') {
-                return Err(anyhow!("Invalid header value"));
+            if !key.as_str().starts_with("x-bare-headers") || !value.to_str()?.starts_with(';') {
+                continue;
             }
-
-            let id: usize = if let Ok(id) = key.as_str().replace("x-bare-headers-", "").parse() {
-                id
-            } else {
-                return Err(anyhow!("Invalid header value"));
-            };
-
-            join[id] = value.to_str().unwrap_or_default().replace(';', "");
-
-            new_headers.remove(key);
+            let id = key
+                .as_str()
+                .trim_start_matches("x-bare-headers-")
+                .parse::<usize>()?;
+            join[id] = value.to_str()?.trim_start_matches(';').to_string();
+            output.remove(key);
         }
-
-        let output = if let Ok(output) = HeaderValue::from_str(join.join("").as_str()) {
-            output
-        } else {
-            return Err(anyhow!("Invalid header value"));
-        };
-
-        Ok(output)
-    } else {
-        Ok(HeaderValue::from_static("{}"))
-    };
+        output.insert(
+            "x-bare-headers",
+            HeaderValue::from_str(join.join("").as_str())?,
+        );
+    }
+    Ok(output
+        .remove("x-bare-headers")
+        .unwrap_or(HeaderValue::from_static("")))
 }
